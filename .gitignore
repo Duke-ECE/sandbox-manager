@@ -1,0 +1,7 @@
+# Binary artifacts
+/server
+
+# Go
+*.test
+*.out
+vendor/
