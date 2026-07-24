@@ -11,7 +11,9 @@ doc 《沙箱技术方案》 for the rationale and non-goals.
 
 ## API
 
-Defined in [`proto/sandbox/v1/sandbox_manager.proto`](proto/sandbox/v1/sandbox_manager.proto):
+Defined in the [`Duke-ECE/protos`](https://github.com/Duke-ECE/protos) repo
+(`proto/sandbox/v1/sandbox_manager.proto`), consumed as the Go module
+`github.com/Duke-ECE/protos`:
 
 - `CreateSandbox(image?, ttl_seconds?) → sandbox_id`
 - `DeleteSandbox(sandbox_id)`
@@ -30,17 +32,19 @@ Server reflection is enabled for debugging with `grpcurl`.
 
 ## Local development
 
-Requires Go 1.25, `buf`, `protoc-gen-go`, `protoc-gen-go-grpc`, and a
-kubeconfig with access to the cluster (`~/.kube/config` or `$KUBECONFIG`).
+Requires Go 1.25 and a kubeconfig with access to the cluster
+(`~/.kube/config` or `$KUBECONFIG`). The proto contract lives in
+[`Duke-ECE/protos`](https://github.com/Duke-ECE/protos) — to pick up API
+changes, `go get github.com/Duke-ECE/protos@latest`.
 
 ```sh
-buf generate            # regenerate gen/ after editing the proto
 go build ./...
+go test ./...
 go run ./cmd/server     # serves on :50051
 
 grpcurl -plaintext localhost:50051 list
-grpcurl -plaintext localhost:50051 sandbox.v1.SandboxManager/CreateSandbox -d '{}'
-grpcurl -plaintext localhost:50051 sandbox.v1.SandboxManager/DeleteSandbox -d '{"sandbox_id":"sb-..."}'
+grpcurl -plaintext localhost:50051 sandbox.v1.SandboxManagerService/CreateSandbox -d '{}'
+grpcurl -plaintext localhost:50051 sandbox.v1.SandboxManagerService/DeleteSandbox -d '{"sandbox_id":"sb-..."}'
 ```
 
 ## Deploy

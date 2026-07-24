@@ -10,7 +10,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 
-	v1 "github.com/Duke-ECE/sandbox-manager/gen/sandbox/v1"
+	v1 "github.com/Duke-ECE/protos/gen/go/sandbox/v1"
 	"github.com/Duke-ECE/sandbox-manager/internal/manager"
 )
 
@@ -27,7 +27,7 @@ func main() {
 	}
 
 	s := grpc.NewServer()
-	v1.RegisterSandboxManagerServer(s, mgr)
+	v1.RegisterSandboxManagerServiceServer(s, mgr)
 	reflection.Register(s)
 
 	go mgr.RunReaper()

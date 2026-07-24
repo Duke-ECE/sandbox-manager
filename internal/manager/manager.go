@@ -23,7 +23,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
-	v1 "github.com/Duke-ECE/sandbox-manager/gen/sandbox/v1"
+	v1 "github.com/Duke-ECE/protos/gen/go/sandbox/v1"
 )
 
 const (
@@ -37,9 +37,9 @@ const (
 	reaperInterval = time.Minute
 )
 
-// Manager implements v1.SandboxManagerServer.
+// Manager implements v1.SandboxManagerServiceServer.
 type Manager struct {
-	v1.UnimplementedSandboxManagerServer
+	v1.UnimplementedSandboxManagerServiceServer
 
 	client       kubernetes.Interface
 	namespace    string

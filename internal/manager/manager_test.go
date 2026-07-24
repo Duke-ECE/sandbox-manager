@@ -17,18 +17,18 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 
-	v1 "github.com/Duke-ECE/sandbox-manager/gen/sandbox/v1"
+	v1 "github.com/Duke-ECE/protos/gen/go/sandbox/v1"
 )
 
 // newTestClient serves the real SandboxManager gRPC service over an in-memory
 // bufconn listener, backed by a fake k8s API. This exercises the full path —
 // proto contract, server handler, k8s client logic — without a cluster.
-func newTestClient(t *testing.T, m *Manager) (v1.SandboxManagerClient, *fake.Clientset) {
+func newTestClient(t *testing.T, m *Manager) (v1.SandboxManagerServiceClient, *fake.Clientset) {
 	t.Helper()
 
 	lis := bufconn.Listen(1024 * 1024)
 	s := grpc.NewServer()
-	v1.RegisterSandboxManagerServer(s, m)
+	v1.RegisterSandboxManagerServiceServer(s, m)
 	go func() { _ = s.Serve(lis) }()
 	t.Cleanup(s.Stop)
 
@@ -45,7 +45,7 @@ func newTestClient(t *testing.T, m *Manager) (v1.SandboxManagerClient, *fake.Cli
 	t.Cleanup(func() { conn.Close() })
 
 	client, _ := m.client.(*fake.Clientset)
-	return v1.NewSandboxManagerClient(conn), client
+	return v1.NewSandboxManagerServiceClient(conn), client
 }
 
 func newManager(objects ...corev1.Pod) *Manager {
