@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"google.golang.org/grpc/reflection"
 
 	v1 "github.com/Duke-ECE/protos/gen/go/sandbox/v1"
+	v2 "github.com/Duke-ECE/protos/gen/go/sandbox/v2"
 	"github.com/Duke-ECE/sandbox-manager/internal/manager"
 )
 
@@ -28,9 +30,14 @@ func main() {
 
 	s := grpc.NewServer()
 	v1.RegisterSandboxManagerServiceServer(s, mgr)
+	v2.RegisterSandboxExecutorServiceServer(s, mgr)
 	reflection.Register(s)
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	go mgr.RunReaper()
+	go mgr.RunPoolController(ctx)
 
 	go func() {
 		log.Printf("sandbox-manager gRPC listening on %s (namespace=%s)", addr, mgr.Namespace())

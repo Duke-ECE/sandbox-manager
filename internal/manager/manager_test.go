@@ -18,17 +18,19 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	v1 "github.com/Duke-ECE/protos/gen/go/sandbox/v1"
+	v2 "github.com/Duke-ECE/protos/gen/go/sandbox/v2"
 )
 
-// newTestClient serves the real SandboxManager gRPC service over an in-memory
-// bufconn listener, backed by a fake k8s API. This exercises the full path —
+// newTestClient serves the real gRPC services over an in-memory bufconn
+// listener, backed by a fake k8s API. This exercises the full path —
 // proto contract, server handler, k8s client logic — without a cluster.
-func newTestClient(t *testing.T, m *Manager) (v1.SandboxManagerServiceClient, *fake.Clientset) {
+func newTestClient(t *testing.T, m *Manager) (v1.SandboxManagerServiceClient, v2.SandboxExecutorServiceClient, *fake.Clientset) {
 	t.Helper()
 
 	lis := bufconn.Listen(1024 * 1024)
 	s := grpc.NewServer()
 	v1.RegisterSandboxManagerServiceServer(s, m)
+	v2.RegisterSandboxExecutorServiceServer(s, m)
 	go func() { _ = s.Serve(lis) }()
 	t.Cleanup(s.Stop)
 
@@ -45,7 +47,7 @@ func newTestClient(t *testing.T, m *Manager) (v1.SandboxManagerServiceClient, *f
 	t.Cleanup(func() { conn.Close() })
 
 	client, _ := m.client.(*fake.Clientset)
-	return v1.NewSandboxManagerServiceClient(conn), client
+	return v1.NewSandboxManagerServiceClient(conn), v2.NewSandboxExecutorServiceClient(conn), client
 }
 
 func newManager(objects ...corev1.Pod) *Manager {
@@ -80,7 +82,7 @@ func sandboxPod(name, createdAt string, ttl int64) corev1.Pod {
 }
 
 func TestCreateSandbox(t *testing.T) {
-	client, k8s := newTestClient(t, newManager())
+	client, _, k8s := newTestClient(t, newManager())
 
 	resp, err := client.CreateSandbox(context.Background(), &v1.CreateSandboxRequest{
 		Image:      "busybox:1.36",
@@ -118,7 +120,7 @@ func TestCreateSandbox(t *testing.T) {
 }
 
 func TestCreateSandboxDefaults(t *testing.T) {
-	client, k8s := newTestClient(t, newManager())
+	client, _, k8s := newTestClient(t, newManager())
 
 	resp, err := client.CreateSandbox(context.Background(), &v1.CreateSandboxRequest{})
 	if err != nil {
@@ -139,7 +141,7 @@ func TestCreateSandboxDefaults(t *testing.T) {
 func TestCreateSandboxLimit(t *testing.T) {
 	m := newManager()
 	m.maxSandboxes = 2
-	client, _ := newTestClient(t, m)
+	client, _, _ := newTestClient(t, m)
 
 	for i := 0; i < 2; i++ {
 		if _, err := client.CreateSandbox(context.Background(), &v1.CreateSandboxRequest{}); err != nil {
@@ -153,7 +155,7 @@ func TestCreateSandboxLimit(t *testing.T) {
 }
 
 func TestDeleteSandbox(t *testing.T) {
-	client, k8s := newTestClient(t, newManager())
+	client, _, k8s := newTestClient(t, newManager())
 
 	resp, err := client.CreateSandbox(context.Background(), &v1.CreateSandboxRequest{})
 	if err != nil {
@@ -173,7 +175,7 @@ func TestDeleteSandbox(t *testing.T) {
 }
 
 func TestDeleteSandboxNotFound(t *testing.T) {
-	client, _ := newTestClient(t, newManager())
+	client, _, _ := newTestClient(t, newManager())
 
 	_, err := client.DeleteSandbox(context.Background(), &v1.DeleteSandboxRequest{SandboxId: "sb-nope"})
 	if status.Code(err) != codes.NotFound {
@@ -182,7 +184,7 @@ func TestDeleteSandboxNotFound(t *testing.T) {
 }
 
 func TestDeleteSandboxEmptyID(t *testing.T) {
-	client, _ := newTestClient(t, newManager())
+	client, _, _ := newTestClient(t, newManager())
 
 	_, err := client.DeleteSandbox(context.Background(), &v1.DeleteSandboxRequest{})
 	if status.Code(err) != codes.InvalidArgument {
