@@ -25,6 +25,7 @@ Repo-specific:
   `internal/infrastructure/k8s/` (clientset `PodStore` impl + `pods/exec`
   SPDY), `internal/transport/grpc/` (thin handlers + the single
   error→status mapper). Slices never import grpc/status|codes.
-- Tests: `k8s.io/client-go` fake clientset + gRPC `bufconn`; the
-  `pods/exec` SPDY call sits behind the `executor.ExecFunc` seam.
+- Tests: unit tests next to code (`k8s.io/client-go` fake clientset + gRPC
+  `bufconn`; the `pods/exec` SPDY call sits behind the `executor.ExecFunc`
+  seam); `test/` holds whole-service integration tests over real TCP.
 - Manual check: `grpcurl -plaintext localhost:50051 list`.
