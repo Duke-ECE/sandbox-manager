@@ -18,6 +18,13 @@ Repo-specific:
   `sandbox.v2.SandboxExecutorService` — protos pinned in go.mod.
 - k8s.io deps are pinned (v0.34.x) — do not let `go mod tidy` bump them past
   the golang:1.25 Docker line.
+- Layout: vertical slices + hexagonal ports. `internal/sandbox/` (lifecycle +
+  pool slice: types, service, pool controller, `PodStore` port, Kind-typed
+  domain errors), `internal/executor/` (v2 Execute slice; reaches the pool via
+  a consumer-owned `Pool` interface, exec via the `ExecFunc` seam),
+  `internal/infrastructure/k8s/` (clientset `PodStore` impl + `pods/exec`
+  SPDY), `internal/transport/grpc/` (thin handlers + the single
+  error→status mapper). Slices never import grpc/status|codes.
 - Tests: `k8s.io/client-go` fake clientset + gRPC `bufconn`; the
-  `pods/exec` SPDY call sits behind the `execFunc` seam.
+  `pods/exec` SPDY call sits behind the `executor.ExecFunc` seam.
 - Manual check: `grpcurl -plaintext localhost:50051 list`.

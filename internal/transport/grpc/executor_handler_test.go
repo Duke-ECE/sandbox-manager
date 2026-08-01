@@ -1,4 +1,4 @@
-package manager
+package grpc
 
 import (
 	"context"
@@ -10,28 +10,44 @@ import (
 	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
 	utilexec "k8s.io/utils/exec"
 
 	v2 "github.com/Duke-ECE/protos/gen/go/sandbox/v2"
+	"github.com/Duke-ECE/sandbox-manager/internal/executor"
+	"github.com/Duke-ECE/sandbox-manager/internal/sandbox"
 )
 
 // poolPod seeds a pool pod in the given phase and k8s pod phase.
 func poolPod(name, poolPhase string, k8sPhase corev1.PodPhase) corev1.Pod {
-	p := sandboxPod(name, "2026-01-01T00:00:00Z", 900)
-	p.Labels[labelPool] = poolPhase
-	p.Status.Phase = k8sPhase
-	return p
+	return corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: "pi-sandbox",
+			Labels: map[string]string{
+				"app":        "sandbox",
+				"sandbox-id": name,
+				"pool":       poolPhase,
+			},
+			Annotations: map[string]string{
+				"sandbox.duke-ece/created-at":  "2026-01-01T00:00:00Z",
+				"sandbox.duke-ece/ttl-seconds": "900",
+			},
+		},
+		Status: corev1.PodStatus{Phase: k8sPhase},
+	}
 }
 
-// newExecutorManager returns a Manager wired for v2 tests with a canned exec.
-func newExecutorManager(execFn execFunc, objects ...corev1.Pod) *Manager {
-	m := newManager(objects...)
-	m.poolSize = 3
-	m.execTimeout = 60
-	m.maxOutput = 1 << 20
-	m.tools = map[string][]string{"shell": {"/bin/sh", "-c"}}
-	m.execFn = execFn
-	return m
+// newExecutorTestClient serves the stack with a canned exec and executor
+// config tweaks applied.
+func newExecutorTestClient(t *testing.T, execFn executor.ExecFunc, tweak func(*executor.Config), objects ...corev1.Pod) (v2.SandboxExecutorServiceClient, *fake.Clientset) {
+	t.Helper()
+	exCfg := testExecutorConfig()
+	if tweak != nil {
+		tweak(&exCfg)
+	}
+	_, client, cs := newTestClient(t, testSandboxConfig(), exCfg, execFn, objects...)
+	return client, cs
 }
 
 func TestExecuteHappyPath(t *testing.T) {
@@ -51,8 +67,7 @@ func TestExecuteHappyPath(t *testing.T) {
 		stdout.Write([]byte("hi\n"))
 		return nil
 	}
-	m := newExecutorManager(execFn, poolPod("sb-ready1", poolReady, corev1.PodRunning))
-	_, client, k8s := newTestClient(t, m)
+	client, k8s := newExecutorTestClient(t, execFn, nil, poolPod("sb-ready1", sandbox.PoolReady, corev1.PodRunning))
 
 	resp, err := client.Execute(context.Background(), &v2.ExecuteRequest{Tool: "shell", Input: "echo hi"})
 	if err != nil {
@@ -76,8 +91,7 @@ func TestExecuteHappyPath(t *testing.T) {
 }
 
 func TestExecuteUnknownTool(t *testing.T) {
-	m := newExecutorManager(nil)
-	_, client, _ := newTestClient(t, m)
+	client, _ := newExecutorTestClient(t, nil, nil)
 
 	_, err := client.Execute(context.Background(), &v2.ExecuteRequest{Tool: "ruby", Input: "puts 1"})
 	if status.Code(err) != codes.InvalidArgument {
@@ -86,9 +100,8 @@ func TestExecuteUnknownTool(t *testing.T) {
 }
 
 func TestExecutePoolExhausted(t *testing.T) {
-	m := newExecutorManager(nil, poolPod("sb-busy", poolInUse, corev1.PodRunning))
-	m.maxSandboxes = 1
-	_, client, _ := newTestClient(t, m)
+	client, _ := newExecutorTestClient(t, nil, func(cfg *executor.Config) { cfg.MaxSandboxes = 1 },
+		poolPod("sb-busy", sandbox.PoolInUse, corev1.PodRunning))
 
 	_, err := client.Execute(context.Background(), &v2.ExecuteRequest{Tool: "shell", Input: "true"})
 	if status.Code(err) != codes.ResourceExhausted {
@@ -101,8 +114,7 @@ func TestExecuteExitCodePassthrough(t *testing.T) {
 		stderr.Write([]byte("boom"))
 		return utilexec.CodeExitError{Err: errors.New("command failed"), Code: 3}
 	}
-	m := newExecutorManager(execFn, poolPod("sb-ready1", poolReady, corev1.PodRunning))
-	_, client, _ := newTestClient(t, m)
+	client, _ := newExecutorTestClient(t, execFn, nil, poolPod("sb-ready1", sandbox.PoolReady, corev1.PodRunning))
 
 	resp, err := client.Execute(context.Background(), &v2.ExecuteRequest{Tool: "shell", Input: "exit 3"})
 	if err != nil {
@@ -121,9 +133,8 @@ func TestExecuteOutputTruncation(t *testing.T) {
 		stdout.Write([]byte("hello world"))
 		return nil
 	}
-	m := newExecutorManager(execFn, poolPod("sb-ready1", poolReady, corev1.PodRunning))
-	m.maxOutput = 4
-	_, client, _ := newTestClient(t, m)
+	client, _ := newExecutorTestClient(t, execFn, func(cfg *executor.Config) { cfg.MaxOutput = 4 },
+		poolPod("sb-ready1", sandbox.PoolReady, corev1.PodRunning))
 
 	resp, err := client.Execute(context.Background(), &v2.ExecuteRequest{Tool: "shell", Input: "echo hello world"})
 	if err != nil {
@@ -143,8 +154,7 @@ func TestExecuteMarksSandboxInUse(t *testing.T) {
 		seen <- podName
 		return nil
 	}
-	m := newExecutorManager(execFn, poolPod("sb-ready1", poolReady, corev1.PodRunning))
-	_, client, k8s := newTestClient(t, m)
+	client, k8s := newExecutorTestClient(t, execFn, nil, poolPod("sb-ready1", sandbox.PoolReady, corev1.PodRunning))
 
 	if _, err := client.Execute(context.Background(), &v2.ExecuteRequest{Tool: "shell", Input: "true"}); err != nil {
 		t.Fatalf("Execute: %v", err)

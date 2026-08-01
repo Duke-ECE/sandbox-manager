@@ -1,4 +1,4 @@
-package manager
+package sandbox
 
 import (
 	"context"
@@ -8,13 +8,21 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// poolPod seeds a pool pod in the given phase and k8s pod phase.
+func poolPod(name, poolPhase string, k8sPhase corev1.PodPhase) corev1.Pod {
+	p := sandboxPod(name, "2026-01-01T00:00:00Z", 900)
+	p.Labels[labelPool] = poolPhase
+	p.Status.Phase = k8sPhase
+	return p
+}
+
 func TestReconcileCreatesUpToPoolSize(t *testing.T) {
-	m := newManager()
-	m.poolSize = 2
+	svc, _ := newTestService()
+	svc.poolSize = 2
 
-	m.reconcilePool(context.Background())
+	svc.ReconcilePool(context.Background())
 
-	pending, err := m.listPoolPods(context.Background(), poolPending)
+	pending, err := svc.ListPoolPods(context.Background(), PoolPending)
 	if err != nil {
 		t.Fatalf("list pending: %v", err)
 	}
@@ -34,14 +42,14 @@ func TestReconcileCreatesUpToPoolSize(t *testing.T) {
 }
 
 func TestReconcilePromotesRunningPendingToReady(t *testing.T) {
-	m := newManager(poolPod("sb-p1", poolPending, corev1.PodRunning),
-		poolPod("sb-p2", poolPending, corev1.PodPending))
-	m.poolSize = 2
+	svc, _ := newTestService(poolPod("sb-p1", PoolPending, corev1.PodRunning),
+		poolPod("sb-p2", PoolPending, corev1.PodPending))
+	svc.poolSize = 2
 
-	m.reconcilePool(context.Background())
+	svc.ReconcilePool(context.Background())
 
-	ready, _ := m.listPoolPods(context.Background(), poolReady)
-	pending, _ := m.listPoolPods(context.Background(), poolPending)
+	ready, _ := svc.ListPoolPods(context.Background(), PoolReady)
+	pending, _ := svc.ListPoolPods(context.Background(), PoolPending)
 	if len(ready) != 1 || ready[0].Name != "sb-p1" {
 		t.Errorf("expected sb-p1 ready, got %v", podNames(ready))
 	}
@@ -51,37 +59,37 @@ func TestReconcilePromotesRunningPendingToReady(t *testing.T) {
 }
 
 func TestReconcileRespectsMaxSandboxes(t *testing.T) {
-	m := newManager()
-	m.poolSize = 5
-	m.maxSandboxes = 2
+	svc, _ := newTestService()
+	svc.poolSize = 5
+	svc.maxSandboxes = 2
 
-	m.reconcilePool(context.Background())
+	svc.ReconcilePool(context.Background())
 
-	pending, _ := m.listPoolPods(context.Background(), poolPending)
+	pending, _ := svc.ListPoolPods(context.Background(), PoolPending)
 	if len(pending) != 2 {
 		t.Errorf("expected 2 pods (max), got %d", len(pending))
 	}
 }
 
 func TestReconcileTopsUpPartialPool(t *testing.T) {
-	m := newManager(poolPod("sb-r1", poolReady, corev1.PodRunning))
-	m.poolSize = 3
+	svc, _ := newTestService(poolPod("sb-r1", PoolReady, corev1.PodRunning))
+	svc.poolSize = 3
 
-	m.reconcilePool(context.Background())
+	svc.ReconcilePool(context.Background())
 
-	pending, _ := m.listPoolPods(context.Background(), poolPending)
+	pending, _ := svc.ListPoolPods(context.Background(), PoolPending)
 	if len(pending) != 2 {
 		t.Errorf("expected 2 new pending pods, got %d", len(pending))
 	}
 }
 
 func TestRecoverPoolDeletesOrphanedInUse(t *testing.T) {
-	m := newManager(poolPod("sb-orphan", poolInUse, corev1.PodRunning),
-		poolPod("sb-keep", poolReady, corev1.PodRunning))
+	svc, cs := newTestService(poolPod("sb-orphan", PoolInUse, corev1.PodRunning),
+		poolPod("sb-keep", PoolReady, corev1.PodRunning))
 
-	m.recoverPool(context.Background())
+	svc.recoverPool(context.Background())
 
-	remaining, err := m.client.CoreV1().Pods("pi-sandbox").List(context.Background(), metav1.ListOptions{})
+	remaining, err := cs.CoreV1().Pods("pi-sandbox").List(context.Background(), metav1.ListOptions{})
 	if err != nil {
 		t.Fatalf("list pods: %v", err)
 	}
