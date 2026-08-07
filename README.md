@@ -51,9 +51,8 @@ Requires Go 1.25 and a kubeconfig with access to the cluster
 changes, `go get github.com/Duke-ECE/protos@latest`.
 
 ```sh
-go build ./...
-go test ./...
-go run ./cmd/server     # serves on :50051
+make build test       # standard Makefile; `make gates` before every push
+make run              # serves on :50051
 
 grpcurl -plaintext localhost:50051 list
 grpcurl -plaintext localhost:50051 sandbox.v2.SandboxExecutorService/Execute \
