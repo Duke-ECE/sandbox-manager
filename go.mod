@@ -3,7 +3,8 @@ module github.com/Duke-ECE/sandbox-manager
 go 1.25.5
 
 require (
-	github.com/Duke-ECE/protos v0.2.0
+	github.com/Duke-ECE/protos v0.9.1
+	github.com/tencentcloud/CubeSandbox/sdk/go v0.7.3
 	google.golang.org/grpc v1.82.1
 	k8s.io/api v0.34.3
 	k8s.io/apimachinery v0.34.3

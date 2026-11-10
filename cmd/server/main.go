@@ -10,12 +10,17 @@ import (
 	"os/signal"
 	"strconv"
 	"syscall"
+	"time"
+
+	cubesandbox "github.com/tencentcloud/CubeSandbox/sdk/go"
 
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/Duke-ECE/sandbox-manager/internal/executor"
+	"github.com/Duke-ECE/sandbox-manager/internal/infrastructure/cube"
 	"github.com/Duke-ECE/sandbox-manager/internal/infrastructure/k8s"
 	"github.com/Duke-ECE/sandbox-manager/internal/sandbox"
+	"github.com/Duke-ECE/sandbox-manager/internal/sessioncube"
 	transportgrpc "github.com/Duke-ECE/sandbox-manager/internal/transport/grpc"
 )
 
@@ -71,7 +76,38 @@ func main() {
 		log.Fatalf("listen %s: %v", addr, err)
 	}
 
-	s := transportgrpc.NewServer(svc, execSvc)
+	var cubeSvc *sessioncube.Service
+	if apiURL := os.Getenv("CUBE_API_URL"); apiURL != "" {
+		for _, name := range []string{"CUBE_API_KEY", "CUBE_TEMPLATE_ID", "CUBE_PROXY_NODE_IP", "CUBE_PROXY_SCHEME", "CUBE_SANDBOX_DOMAIN"} {
+			if os.Getenv(name) == "" {
+				log.Fatalf("%s is required when CUBE_API_URL is set", name)
+			}
+		}
+		cfg := cubesandbox.NewConfigFromEnv()
+		cfg.APIURL = apiURL
+		cubeClient := cube.New(cfg)
+		defer cubeClient.Close()
+		cubeSvc, err = sessioncube.New(cubeClient, sessioncube.Config{
+			TemplateID:  os.Getenv("CUBE_TEMPLATE_ID"),
+			MaxSessions: envInt("CUBE_MAX_SESSIONS", 10),
+			TTL:         time.Duration(envInt("CUBE_TTL_SECONDS", 1800)) * time.Second,
+			MaxBytes:    envInt("CUBE_MAX_RESOURCE_BYTES", 1<<20),
+			MaxOutput:   envInt("CUBE_MAX_OUTPUT_BYTES", 1<<20),
+			MaxRun:      time.Duration(envInt("CUBE_MAX_RUN_SECONDS", 60)) * time.Second,
+		})
+		if err != nil {
+			log.Fatalf("init Cube integration: %v", err)
+		}
+		recoverCtx, recoverCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		err = cubeSvc.Recover(recoverCtx)
+		recoverCancel()
+		if err != nil {
+			log.Printf("Cube integration disabled: binding recovery failed: %v", err)
+			cubeSvc = nil
+		}
+	}
+
+	s := transportgrpc.NewServer(svc, execSvc, cubeSvc)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
