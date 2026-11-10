@@ -78,10 +78,14 @@ func main() {
 
 	var cubeSvc *sessioncube.Service
 	if apiURL := os.Getenv("CUBE_API_URL"); apiURL != "" {
-		for _, name := range []string{"CUBE_API_KEY", "CUBE_TEMPLATE_ID", "CUBE_PROXY_NODE_IP", "CUBE_PROXY_SCHEME", "CUBE_SANDBOX_DOMAIN"} {
+		for _, name := range []string{"CUBE_API_KEY", "CUBE_TEMPLATE_ID", "CUBE_PROXY_NODE_IP", "CUBE_PROXY_PORT_HTTP", "CUBE_PROXY_SCHEME", "CUBE_SANDBOX_DOMAIN"} {
 			if os.Getenv(name) == "" {
 				log.Fatalf("%s is required when CUBE_API_URL is set", name)
 			}
+		}
+		proxyPort, portErr := strconv.Atoi(os.Getenv("CUBE_PROXY_PORT_HTTP"))
+		if portErr != nil || proxyPort < 1 || proxyPort > 65535 {
+			log.Fatal("CUBE_PROXY_PORT_HTTP must be a TCP port between 1 and 65535")
 		}
 		cfg := cubesandbox.NewConfigFromEnv()
 		cfg.APIURL = apiURL
