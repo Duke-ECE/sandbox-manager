@@ -38,7 +38,7 @@ type CommandResult struct {
 type Sandbox interface {
 	ID() string
 	Run(context.Context, string, time.Duration) (CommandResult, error)
-	Read(context.Context, string) ([]byte, error)
+	Read(context.Context, string, int) ([]byte, error)
 	Write(context.Context, string, []byte) error
 	Kill(context.Context) error
 }
@@ -258,7 +258,7 @@ func (s *Service) Read(ctx context.Context, sessionID, p string) ([]byte, error)
 		return nil, err
 	}
 	var data []byte
-	err = s.withSandbox(ctx, sessionID, func(sb Sandbox) (err error) { data, err = sb.Read(ctx, p); return err })
+	err = s.withSandbox(ctx, sessionID, func(sb Sandbox) (err error) { data, err = sb.Read(ctx, p, s.cfg.MaxBytes); return err })
 	if err != nil {
 		return nil, err
 	}
@@ -294,7 +294,7 @@ func (s *Service) EditMany(ctx context.Context, sessionID, p string, changes []E
 		return err
 	}
 	return s.withSandbox(ctx, sessionID, func(sb Sandbox) error {
-		data, err := sb.Read(ctx, p)
+		data, err := sb.Read(ctx, p, s.cfg.MaxBytes)
 		if err != nil {
 			return err
 		}

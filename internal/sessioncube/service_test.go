@@ -19,7 +19,7 @@ func (s *fakeSandbox) ID() string { return s.id }
 func (s *fakeSandbox) Run(_ context.Context, command string, _ time.Duration) (CommandResult, error) {
 	return CommandResult{Stdout: command, ExitCode: 0}, nil
 }
-func (s *fakeSandbox) Read(_ context.Context, p string) ([]byte, error) {
+func (s *fakeSandbox) Read(_ context.Context, p string, _ int) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	data, ok := s.files[p]

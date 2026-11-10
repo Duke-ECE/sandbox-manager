@@ -85,8 +85,18 @@ func (s *sandbox) Run(ctx context.Context, command string, timeout time.Duration
 	return sessioncube.CommandResult{ExitCode: res.ExitCode, Stdout: res.Stdout, Stderr: res.Stderr}, nil
 }
 
-func (s *sandbox) Read(ctx context.Context, p string) ([]byte, error) {
+func (s *sandbox) Read(ctx context.Context, p string, maxBytes int) ([]byte, error) {
+	entry, err := s.sdk.Files().Stat(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	if entry.Size > int64(maxBytes) {
+		return nil, sessioncube.ErrLimit
+	}
 	data, err := s.sdk.Files().Read(ctx, p)
+	if len(data) > maxBytes {
+		return nil, sessioncube.ErrLimit
+	}
 	return []byte(data), err
 }
 

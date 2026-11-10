@@ -34,7 +34,7 @@ func (s *sessionTestSandbox) ID() string { return "cube-test" }
 func (s *sessionTestSandbox) Run(context.Context, string, time.Duration) (sessioncube.CommandResult, error) {
 	return sessioncube.CommandResult{Stdout: "ok", ExitCode: 0}, nil
 }
-func (s *sessionTestSandbox) Read(_ context.Context, p string) ([]byte, error) {
+func (s *sessionTestSandbox) Read(_ context.Context, p string, _ int) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]byte(nil), s.files[p]...), nil
