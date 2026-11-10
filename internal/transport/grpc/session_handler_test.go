@@ -81,6 +81,9 @@ func TestSessionV3OverGRPC(t *testing.T) {
 	if err != nil || putResult.GetBytesWritten() != 11 {
 		t.Fatalf("put: %v %v", putResult, err)
 	}
+	if _, err := client.ExecuteTool(ctx, &v3.ExecuteToolRequest{SessionId: "sess-test", Tool: &v3.ExecuteToolRequest_Edit{Edit: &v3.EditTool{Path: "hello.txt", Edits: []*v3.EditReplacement{{OldText: "hello", NewText: "hi"}, {OldText: "world", NewText: "Cube"}}}}}); err != nil {
+		t.Fatal(err)
+	}
 	get, err := client.GetResource(ctx, &v3.GetResourceRequest{SessionId: "sess-test", Path: "hello.txt"})
 	if err != nil {
 		t.Fatal(err)
@@ -96,7 +99,7 @@ func TestSessionV3OverGRPC(t *testing.T) {
 		}
 		got = append(got, reply.GetChunk()...)
 	}
-	if string(got) != "hello world" {
+	if string(got) != "hi Cube" {
 		t.Fatalf("get: %q", got)
 	}
 	if _, err := client.CloseSessionSandbox(ctx, &v3.CloseSessionSandboxRequest{SessionId: "sess-test"}); err != nil {

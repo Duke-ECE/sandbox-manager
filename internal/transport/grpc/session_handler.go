@@ -70,7 +70,15 @@ func (h *SessionHandler) ExecuteTool(ctx context.Context, req *v3.ExecuteToolReq
 	case *v3.ExecuteToolRequest_Write:
 		err = h.svc.Write(ctx, req.GetSessionId(), tool.Write.GetPath(), []byte(tool.Write.GetContent()))
 	case *v3.ExecuteToolRequest_Edit:
-		err = h.svc.Edit(ctx, req.GetSessionId(), tool.Edit.GetPath(), tool.Edit.GetOldText(), tool.Edit.GetNewText())
+		if len(tool.Edit.GetEdits()) == 0 {
+			err = h.svc.Edit(ctx, req.GetSessionId(), tool.Edit.GetPath(), tool.Edit.GetOldText(), tool.Edit.GetNewText())
+		} else {
+			changes := make([]sessioncube.EditChange, 0, len(tool.Edit.GetEdits()))
+			for _, item := range tool.Edit.GetEdits() {
+				changes = append(changes, sessioncube.EditChange{Old: item.GetOldText(), New: item.GetNewText()})
+			}
+			err = h.svc.EditMany(ctx, req.GetSessionId(), tool.Edit.GetPath(), changes)
+		}
 	default:
 		return nil, toStatus(sessioncube.ErrInvalid)
 	}

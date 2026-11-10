@@ -85,9 +85,15 @@ func TestSessionLifecycleAndFiles(t *testing.T) {
 	if err := svc.Edit(ctx, session, "note.txt", "world", "Cube"); err != nil {
 		t.Fatal(err)
 	}
+	if err := svc.EditMany(ctx, session, "note.txt", []EditChange{{Old: "hello", New: "hi"}, {Old: "Cube", New: "sandbox"}}); err != nil {
+		t.Fatal(err)
+	}
 	data, err := svc.Read(ctx, session, "/workspace/note.txt")
-	if err != nil || string(data) != "hello Cube" {
+	if err != nil || string(data) != "hi sandbox" {
 		t.Fatalf("read %q: %v", data, err)
+	}
+	if err := svc.EditMany(ctx, session, "note.txt", []EditChange{{Old: "hi", New: "x"}, {Old: "hi sandbox", New: "y"}}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("overlap: %v", err)
 	}
 	if err := svc.Write(ctx, session, "../outside", []byte("bad")); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("path escape: %v", err)

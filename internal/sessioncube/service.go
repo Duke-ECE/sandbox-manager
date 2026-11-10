@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -278,8 +279,14 @@ func (s *Service) Write(ctx context.Context, sessionID, p string, data []byte) e
 	return s.withSandbox(ctx, sessionID, func(sb Sandbox) error { return sb.Write(ctx, p, data) })
 }
 
+type EditChange struct{ Old, New string }
+
 func (s *Service) Edit(ctx context.Context, sessionID, p, old, replacement string) error {
-	if old == "" {
+	return s.EditMany(ctx, sessionID, p, []EditChange{{Old: old, New: replacement}})
+}
+
+func (s *Service) EditMany(ctx context.Context, sessionID, p string, changes []EditChange) error {
+	if len(changes) == 0 {
 		return ErrInvalid
 	}
 	p, err := workspacePath(p)
@@ -294,10 +301,31 @@ func (s *Service) Edit(ctx context.Context, sessionID, p, old, replacement strin
 		if len(data) > s.cfg.MaxBytes {
 			return ErrLimit
 		}
-		if strings.Count(string(data), old) != 1 {
-			return ErrInvalid
+		original := string(data)
+		type located struct {
+			start, end  int
+			replacement string
 		}
-		updated := []byte(strings.Replace(string(data), old, replacement, 1))
+		positions := make([]located, 0, len(changes))
+		for _, change := range changes {
+			if change.Old == "" || strings.Count(original, change.Old) != 1 {
+				return ErrInvalid
+			}
+			start := strings.Index(original, change.Old)
+			positions = append(positions, located{start: start, end: start + len(change.Old), replacement: change.New})
+		}
+		sort.Slice(positions, func(i, j int) bool { return positions[i].start < positions[j].start })
+		for i := 1; i < len(positions); i++ {
+			if positions[i].start < positions[i-1].end {
+				return ErrInvalid
+			}
+		}
+		updatedText := original
+		for i := len(positions) - 1; i >= 0; i-- {
+			p := positions[i]
+			updatedText = updatedText[:p.start] + p.replacement + updatedText[p.end:]
+		}
+		updated := []byte(updatedText)
 		if len(updated) > s.cfg.MaxBytes {
 			return ErrLimit
 		}
