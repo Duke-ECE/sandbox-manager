@@ -70,6 +70,7 @@ type Service struct {
 	cfg    Config
 	mu     sync.Mutex
 	byID   map[string]*binding
+	lost   map[string]struct{}
 }
 
 func New(client Client, cfg Config) (*Service, error) {
@@ -91,7 +92,7 @@ func New(client Client, cfg Config) (*Service, error) {
 	if cfg.MaxRun <= 0 {
 		cfg.MaxRun = 60 * time.Second
 	}
-	return &Service{client: client, cfg: cfg, byID: make(map[string]*binding)}, nil
+	return &Service{client: client, cfg: cfg, byID: make(map[string]*binding), lost: make(map[string]struct{})}, nil
 }
 
 // Recover rebuilds the single-replica pilot index from Cube sandbox metadata.
@@ -114,6 +115,46 @@ func (s *Service) Recover(ctx context.Context) error {
 	return nil
 }
 
+// Reconcile marks bindings lost when Cube no longer lists their sandbox.
+// Keep the tombstone so a subsequent tool call cannot silently create an
+// empty workspace for a transcript that still refers to the old files.
+func (s *Service) Reconcile(ctx context.Context) error {
+	list, err := s.client.List(ctx)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	bindings := make(map[string]*binding, len(s.byID))
+	for id, b := range s.byID {
+		bindings[id] = b
+	}
+	s.mu.Unlock()
+	for sessionID, b := range bindings {
+		if b.ready != nil {
+			select {
+			case <-b.ready:
+			default:
+				continue
+			}
+		}
+		b.mu.Lock()
+		missing := b.state == StateLost || (b.state == StateReady && list[sessionID] != b.sandboxID)
+		if missing {
+			b.state = StateLost
+		}
+		b.mu.Unlock()
+		if missing {
+			s.mu.Lock()
+			if s.byID[sessionID] == b {
+				delete(s.byID, sessionID)
+				s.lost[sessionID] = struct{}{}
+			}
+			s.mu.Unlock()
+		}
+	}
+	return nil
+}
+
 func validID(id string) bool {
 	if len(id) < 1 || len(id) > 128 {
 		return false
@@ -131,6 +172,10 @@ func (s *Service) Ensure(ctx context.Context, sessionID, profileID string) (Stat
 		return StateAbsent, ErrInvalid
 	}
 	s.mu.Lock()
+	if _, lost := s.lost[sessionID]; lost {
+		s.mu.Unlock()
+		return StateLost, ErrUnready
+	}
 	if b := s.byID[sessionID]; b != nil {
 		s.mu.Unlock()
 		if b.ready != nil {
@@ -181,8 +226,12 @@ func (s *Service) withSandbox(ctx context.Context, sessionID string, fn func(San
 	}
 	s.mu.Lock()
 	b := s.byID[sessionID]
+	_, lost := s.lost[sessionID]
 	s.mu.Unlock()
 	if b == nil {
+		if lost {
+			return ErrUnready
+		}
 		return ErrNotFound
 	}
 	if b.ready != nil {
@@ -339,6 +388,9 @@ func (s *Service) Close(ctx context.Context, sessionID string) error {
 	}
 	s.mu.Lock()
 	b := s.byID[sessionID]
+	if b == nil {
+		delete(s.lost, sessionID)
+	}
 	s.mu.Unlock()
 	if b == nil {
 		return nil
@@ -379,8 +431,12 @@ func (s *Service) Status(sessionID string) (State, error) {
 	}
 	s.mu.Lock()
 	b := s.byID[sessionID]
+	_, lost := s.lost[sessionID]
 	s.mu.Unlock()
 	if b == nil {
+		if lost {
+			return StateLost, nil
+		}
 		return StateAbsent, nil
 	}
 	b.mu.Lock()

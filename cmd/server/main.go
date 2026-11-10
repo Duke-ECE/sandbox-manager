@@ -110,6 +110,19 @@ func main() {
 			cubeSvc = nil
 		}
 	}
+	if cubeSvc != nil {
+		go func() {
+			ticker := time.NewTicker(time.Minute)
+			defer ticker.Stop()
+			for range ticker.C {
+				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				if err := cubeSvc.Reconcile(ctx); err != nil {
+					log.Printf("Cube binding reconciliation failed: %v", err)
+				}
+				cancel()
+			}
+		}()
+	}
 
 	s := transportgrpc.NewServer(svc, execSvc, cubeSvc)
 
