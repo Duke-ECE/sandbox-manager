@@ -113,7 +113,7 @@ spec:
               value: "tpl-969e7ae7ac964f59be82551a"
             - name: CUBE_PROXY_NODE_IP
               value: "cube.weihao.duckdns.org"
-            - name: CUBE_PROXY_PORT
+            - name: CUBE_PROXY_PORT_HTTP
               value: "10443"
             - name: CUBE_PROXY_SCHEME
               value: "https"
