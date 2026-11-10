@@ -102,7 +102,8 @@ func main() {
 		err = cubeSvc.Recover(recoverCtx)
 		recoverCancel()
 		if err != nil {
-			log.Fatalf("recover Cube bindings: %v", err)
+			log.Printf("Cube integration disabled: binding recovery failed: %v", err)
+			cubeSvc = nil
 		}
 	}
 
