@@ -45,6 +45,7 @@ type fakeClient struct {
 	mu      sync.Mutex
 	creates int
 	sb      *fakeSandbox
+	listed  map[string]string
 }
 
 func (c *fakeClient) Create(_ context.Context, _, _ string, _ time.Duration) (Sandbox, error) {
@@ -54,7 +55,42 @@ func (c *fakeClient) Create(_ context.Context, _, _ string, _ time.Duration) (Sa
 	return c.sb, nil
 }
 func (c *fakeClient) Connect(_ context.Context, _ string) (Sandbox, error) { return c.sb, nil }
-func (c *fakeClient) List(context.Context) (map[string]string, error)      { return nil, nil }
+func (c *fakeClient) List(context.Context) (map[string]string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.listed, nil
+}
+
+func TestReconcileReleasesCapacityWithoutRecreatingLostWorkspace(t *testing.T) {
+	ctx := context.Background()
+	client := &fakeClient{sb: &fakeSandbox{id: "cube-1"}}
+	svc, err := New(client, Config{TemplateID: "test", MaxSessions: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Ensure(ctx, "old", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Ensure(ctx, "new", ""); !errors.Is(err, ErrLimit) {
+		t.Fatalf("limit: %v", err)
+	}
+	if err := svc.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	state, err := svc.Status("old")
+	if err != nil || state != StateLost {
+		t.Fatalf("old status: %s %v", state, err)
+	}
+	if _, err := svc.Ensure(ctx, "old", ""); !errors.Is(err, ErrUnready) {
+		t.Fatalf("lost workspace: %v", err)
+	}
+	if _, err := svc.Ensure(ctx, "new", ""); err != nil {
+		t.Fatalf("released capacity: %v", err)
+	}
+	if client.creates != 2 {
+		t.Fatalf("created %d times", client.creates)
+	}
+}
 
 func TestSessionLifecycleAndFiles(t *testing.T) {
 	ctx := context.Background()
