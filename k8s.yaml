@@ -122,7 +122,7 @@ spec:
             - name: CUBE_MAX_SESSIONS
               value: "2"
             - name: CUBE_TTL_SECONDS
-              value: "60"
+              value: "1800"
             # busybox stands in until a real sandbox-worker image exists;
             # pool pods are started with `sleep infinity`, so it stays alive.
             - name: DEFAULT_IMAGE
