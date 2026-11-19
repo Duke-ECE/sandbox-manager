@@ -202,7 +202,19 @@ func (s *Service) Ensure(ctx context.Context, sessionID, profileID string) (Stat
 
 	sb, err := s.client.Create(ctx, sessionID, s.cfg.TemplateID, s.cfg.TTL)
 	b.mu.Lock()
-	if err == nil {
+	if err != nil {
+		// A timed-out create can still complete in Cube. Look up its metadata
+		// before releasing the reservation, or the next tool call may create a
+		// second sandbox for the same session.
+		recoveryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		list, listErr := s.client.List(recoveryCtx)
+		cancel()
+		if listErr == nil && list[sessionID] != "" {
+			b.sandboxID, b.state = list[sessionID], StateReady
+			err = nil
+		}
+	}
+	if err == nil && b.state != StateReady {
 		if sb == nil || sb.ID() == "" {
 			err = fmt.Errorf("Cube returned no sandbox ID")
 		} else {
@@ -214,6 +226,9 @@ func (s *Service) Ensure(ctx context.Context, sessionID, profileID string) (Stat
 	if err != nil {
 		s.mu.Lock()
 		delete(s.byID, sessionID)
+		// The create outcome is uncertain even when Cube does not list it yet.
+		// Fail closed so a late completion cannot be duplicated by a retry.
+		s.lost[sessionID] = struct{}{}
 		s.mu.Unlock()
 		return StateAbsent, err
 	}

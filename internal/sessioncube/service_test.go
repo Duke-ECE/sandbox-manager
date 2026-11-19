@@ -42,16 +42,20 @@ func (s *fakeSandbox) Kill(context.Context) error {
 }
 
 type fakeClient struct {
-	mu      sync.Mutex
-	creates int
-	sb      *fakeSandbox
-	listed  map[string]string
+	mu        sync.Mutex
+	creates   int
+	sb        *fakeSandbox
+	listed    map[string]string
+	createErr error
 }
 
 func (c *fakeClient) Create(_ context.Context, _, _ string, _ time.Duration) (Sandbox, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.creates++
+	if c.createErr != nil {
+		return nil, c.createErr
+	}
 	return c.sb, nil
 }
 func (c *fakeClient) Connect(_ context.Context, _ string) (Sandbox, error) { return c.sb, nil }
@@ -59,6 +63,44 @@ func (c *fakeClient) List(context.Context) (map[string]string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.listed, nil
+}
+
+func TestEnsureRecoversCreateThatTimedOutAfterCubeStarted(t *testing.T) {
+	client := &fakeClient{
+		sb:        &fakeSandbox{id: "cube-1"},
+		createErr: context.DeadlineExceeded,
+		listed:    map[string]string{"sess-1": "cube-1"},
+	}
+	svc, err := New(client, Config{TemplateID: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		state, err := svc.Ensure(context.Background(), "sess-1", "")
+		if err != nil || state != StateReady {
+			t.Fatalf("Ensure: %s %v", state, err)
+		}
+	}
+	if client.creates != 1 {
+		t.Fatalf("created %d times", client.creates)
+	}
+}
+
+func TestEnsureDoesNotDuplicateUncertainCreate(t *testing.T) {
+	client := &fakeClient{createErr: context.DeadlineExceeded, listed: map[string]string{}}
+	svc, err := New(client, Config{TemplateID: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Ensure(context.Background(), "sess-1", ""); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("first Ensure: %v", err)
+	}
+	if _, err := svc.Ensure(context.Background(), "sess-1", ""); !errors.Is(err, ErrUnready) {
+		t.Fatalf("second Ensure: %v", err)
+	}
+	if client.creates != 1 {
+		t.Fatalf("created %d times", client.creates)
+	}
 }
 
 func TestReconcileReleasesCapacityWithoutRecreatingLostWorkspace(t *testing.T) {
