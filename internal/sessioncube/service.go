@@ -337,15 +337,7 @@ func (s *Service) Run(ctx context.Context, sessionID, command string, timeout ti
 	var result CommandResult
 	err := s.withSandbox(ctx, sessionID, func(sb Sandbox) (err error) {
 		result, err = sb.Run(ctx, command, timeout)
-		if err != nil {
-			return err
-		}
-		if s.cfg.Workspace != nil {
-			if err := s.cfg.Workspace.Checkpoint(ctx, sessionID, sb); err != nil {
-				return fmt.Errorf("%w: %v", ErrCheckpoint, err)
-			}
-		}
-		return nil
+		return err
 	})
 	if err != nil {
 		return CommandResult{}, false, err
@@ -360,6 +352,21 @@ func (s *Service) Run(ctx context.Context, sessionID, command string, timeout ti
 		truncated = true
 	}
 	return result, truncated, nil
+}
+
+// Checkpoint publishes one archive after the full agent turn, before its
+// completion event. A failed checkpoint discards the live sandbox so the next
+// turn restores only the last committed revision.
+func (s *Service) Checkpoint(ctx context.Context, sessionID string) error {
+	if s.cfg.Workspace == nil {
+		return nil
+	}
+	return s.withSandbox(ctx, sessionID, func(sb Sandbox) error {
+		if err := s.cfg.Workspace.Checkpoint(ctx, sessionID, sb); err != nil {
+			return fmt.Errorf("%w: %v", ErrCheckpoint, err)
+		}
+		return nil
+	})
 }
 
 func workspacePath(p string) (string, error) {
@@ -405,15 +412,7 @@ func (s *Service) Write(ctx context.Context, sessionID, p string, data []byte) e
 		return ErrLimit
 	}
 	return s.withSandbox(ctx, sessionID, func(sb Sandbox) error {
-		if err := sb.Write(ctx, p, data); err != nil {
-			return err
-		}
-		if s.cfg.Workspace != nil {
-			if err := s.cfg.Workspace.Checkpoint(ctx, sessionID, sb); err != nil {
-				return fmt.Errorf("%w: %v", ErrCheckpoint, err)
-			}
-		}
-		return nil
+		return sb.Write(ctx, p, data)
 	})
 }
 
@@ -467,15 +466,7 @@ func (s *Service) EditMany(ctx context.Context, sessionID, p string, changes []E
 		if len(updated) > s.cfg.MaxBytes {
 			return ErrLimit
 		}
-		if err := sb.Write(ctx, p, updated); err != nil {
-			return err
-		}
-		if s.cfg.Workspace != nil {
-			if err := s.cfg.Workspace.Checkpoint(ctx, sessionID, sb); err != nil {
-				return fmt.Errorf("%w: %v", ErrCheckpoint, err)
-			}
-		}
-		return nil
+		return sb.Write(ctx, p, updated)
 	})
 }
 

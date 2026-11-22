@@ -36,8 +36,9 @@ consumed as the Go module `github.com/Duke-ECE/protos`:
 
 The pilot uses one manager replica. It recovers session bindings from Cube sandbox metadata at startup. When direct R2 persistence is configured, v3 requires the shared service token; session-manager owns the committed archive pointer. Do not enable it for general production traffic until a real Cube template and sandbox egress have passed the end-to-end gate. See the [Cube integration design](https://github.com/Duke-ECE/managed-agents-design/tree/main/requirements/0005-cubesandbox-integration).
 
-With `R2_ENDPOINT` set, each session has one local `/workspace`. After each bash,
-write, or edit tool, the sandbox creates a deterministic tar.gz archive. A
+With `R2_ENDPOINT` set, each session has one local `/workspace`. After a
+completed agent turn that used bash, write, or edit, the runtime calls
+`CheckpointSessionSandbox` before sending `done`. The sandbox creates a deterministic tar.gz archive. A
 changed archive goes directly from the sandbox to R2 with a short-lived,
 object-specific signed PUT URL; unchanged files do not create a new revision.
 The manager verifies object size and digest metadata before the session-manager

@@ -110,6 +110,16 @@ func (h *SessionHandler) ExecuteTool(ctx context.Context, req *v3.ExecuteToolReq
 	return &v3.ExecuteToolResponse{ExitCode: int32(result.ExitCode), Stdout: result.Stdout, Stderr: result.Stderr, Truncated: truncated}, nil
 }
 
+func (h *SessionHandler) CheckpointSessionSandbox(ctx context.Context, req *v3.CheckpointSessionSandboxRequest) (*v3.CheckpointSessionSandboxResponse, error) {
+	if err := h.authorize(ctx); err != nil {
+		return nil, err
+	}
+	if err := h.svc.Checkpoint(ctx, req.GetSessionId()); err != nil {
+		return nil, toStatus(err)
+	}
+	return &v3.CheckpointSessionSandboxResponse{}, nil
+}
+
 func (h *SessionHandler) PutResource(stream v3.SessionSandboxService_PutResourceServer) error {
 	if err := h.authorize(stream.Context()); err != nil {
 		return err

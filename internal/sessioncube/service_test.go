@@ -82,12 +82,21 @@ func TestWorkspaceRestoreAndCheckpointGateToolSuccess(t *testing.T) {
 	if err := svc.Write(ctx, "sess-1", "file.txt", []byte("hello")); err != nil {
 		t.Fatal(err)
 	}
+	if ws.checkpoints != 0 {
+		t.Fatal("tool published workspace before turn completed")
+	}
+	if err := svc.Checkpoint(ctx, "sess-1"); err != nil {
+		t.Fatal(err)
+	}
 	if ws.checkpoints != 1 {
 		t.Fatalf("checkpoint count = %d", ws.checkpoints)
 	}
 	ws.checkpointErr = errors.New("R2 unavailable")
-	if _, _, err := svc.Run(ctx, "sess-1", "echo x", time.Second); err == nil {
-		t.Fatal("tool succeeded without checkpoint")
+	if _, _, err := svc.Run(ctx, "sess-1", "echo x", time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Checkpoint(ctx, "sess-1"); err == nil {
+		t.Fatal("turn succeeded without checkpoint")
 	}
 	if ws.checkpoints != 2 {
 		t.Fatalf("checkpoint count = %d", ws.checkpoints)

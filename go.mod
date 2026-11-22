@@ -3,7 +3,7 @@ module github.com/Duke-ECE/sandbox-manager
 go 1.25.5
 
 require (
-	github.com/Duke-ECE/protos v0.9.4
+	github.com/Duke-ECE/protos v0.9.5
 	github.com/aws/aws-sdk-go-v2 v1.48.0
 	github.com/aws/aws-sdk-go-v2/credentials v1.21.3
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.116.0

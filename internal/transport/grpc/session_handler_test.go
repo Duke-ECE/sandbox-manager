@@ -91,6 +91,9 @@ func TestSessionV3OverGRPC(t *testing.T) {
 	if _, err := client.ExecuteTool(ctx, &v3.ExecuteToolRequest{SessionId: "sess-test", Tool: &v3.ExecuteToolRequest_Edit{Edit: &v3.EditTool{Path: "hello.txt", Edits: []*v3.EditReplacement{{OldText: "hello", NewText: "hi"}, {OldText: "world", NewText: "Cube"}}}}}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := client.CheckpointSessionSandbox(ctx, &v3.CheckpointSessionSandboxRequest{SessionId: "sess-test"}); err != nil {
+		t.Fatal(err)
+	}
 	get, err := client.GetResource(ctx, &v3.GetResourceRequest{SessionId: "sess-test", Path: "hello.txt"})
 	if err != nil {
 		t.Fatal(err)
