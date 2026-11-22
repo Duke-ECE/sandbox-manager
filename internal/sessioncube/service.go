@@ -12,10 +12,12 @@ import (
 )
 
 var (
-	ErrInvalid  = errors.New("invalid session sandbox request")
-	ErrNotFound = errors.New("session sandbox not found")
-	ErrLimit    = errors.New("session sandbox limit reached")
-	ErrUnready  = errors.New("session sandbox is not ready")
+	ErrInvalid         = errors.New("invalid session sandbox request")
+	ErrNotFound        = errors.New("session sandbox not found")
+	ErrLimit           = errors.New("session sandbox limit reached")
+	ErrUnready         = errors.New("session sandbox is not ready")
+	ErrUnauthenticated = errors.New("session sandbox authentication required")
+	ErrCheckpoint      = errors.New("workspace checkpoint failed")
 )
 
 type State string
@@ -49,13 +51,22 @@ type Client interface {
 	List(context.Context) (map[string]string, error) // session ID -> sandbox ID
 }
 
+// Workspace persists archive bytes directly from the sandbox to object
+// storage. Implementations must not relay the archive through this manager.
+type Workspace interface {
+	Restore(context.Context, string, Sandbox) error
+	Checkpoint(context.Context, string, Sandbox) error
+}
+
 type Config struct {
-	TemplateID  string
-	MaxSessions int
-	TTL         time.Duration
-	MaxBytes    int
-	MaxOutput   int
-	MaxRun      time.Duration
+	TemplateID   string
+	MaxSessions  int
+	TTL          time.Duration
+	MaxBytes     int
+	MaxOutput    int
+	MaxRun       time.Duration
+	Workspace    Workspace
+	ServiceToken string
 }
 
 type binding struct {
@@ -147,7 +158,9 @@ func (s *Service) Reconcile(ctx context.Context) error {
 			s.mu.Lock()
 			if s.byID[sessionID] == b {
 				delete(s.byID, sessionID)
-				s.lost[sessionID] = struct{}{}
+				if s.cfg.Workspace == nil {
+					s.lost[sessionID] = struct{}{}
+				}
 			}
 			s.mu.Unlock()
 		}
@@ -208,27 +221,48 @@ func (s *Service) Ensure(ctx context.Context, sessionID, profileID string) (Stat
 		// second sandbox for the same session.
 		recoveryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		list, listErr := s.client.List(recoveryCtx)
-		cancel()
 		if listErr == nil && list[sessionID] != "" {
-			b.sandboxID, b.state = list[sessionID], StateReady
-			err = nil
+			b.sandboxID = list[sessionID]
+			sb, err = s.client.Connect(recoveryCtx, b.sandboxID)
+			if err == nil && s.cfg.Workspace != nil {
+				err = s.cfg.Workspace.Restore(recoveryCtx, sessionID, sb)
+			}
+			if err == nil {
+				b.state = StateReady
+			}
 		}
+		cancel()
 	}
 	if err == nil && b.state != StateReady {
 		if sb == nil || sb.ID() == "" {
 			err = fmt.Errorf("Cube returned no sandbox ID")
 		} else {
-			b.sandboxID, b.state = sb.ID(), StateReady
+			b.sandboxID = sb.ID()
+			if s.cfg.Workspace != nil {
+				err = s.cfg.Workspace.Restore(ctx, sessionID, sb)
+			}
+			if err == nil {
+				b.state = StateReady
+			}
 		}
 	}
 	close(b.ready)
 	b.mu.Unlock()
 	if err != nil {
+		cleanupOK := false
+		if sb != nil {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			cleanupOK = sb.Kill(cleanupCtx) == nil
+			cancel()
+		}
 		s.mu.Lock()
 		delete(s.byID, sessionID)
-		// The create outcome is uncertain even when Cube does not list it yet.
-		// Fail closed so a late completion cannot be duplicated by a retry.
-		s.lost[sessionID] = struct{}{}
+		// A verified cleanup allows a fresh attempt to restore the committed
+		// archive after a transient R2 failure. Uncertain Cube creation stays
+		// fenced to avoid two writable sandboxes for one session.
+		if s.cfg.Workspace == nil || !cleanupOK {
+			s.lost[sessionID] = struct{}{}
+		}
 		s.mu.Unlock()
 		return StateAbsent, err
 	}
@@ -265,10 +299,32 @@ func (s *Service) withSandbox(ctx context.Context, sessionID string, fn func(San
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			b.state = StateLost
+			if s.cfg.Workspace != nil {
+				s.mu.Lock()
+				if s.byID[sessionID] == b {
+					delete(s.byID, sessionID)
+				}
+				s.mu.Unlock()
+			}
 		}
 		return err
 	}
-	return fn(sb)
+	err = fn(sb)
+	if errors.Is(err, ErrCheckpoint) {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		killErr := sb.Kill(cleanupCtx)
+		cancel()
+		s.mu.Lock()
+		if s.byID[sessionID] == b {
+			delete(s.byID, sessionID)
+			if killErr != nil {
+				s.lost[sessionID] = struct{}{}
+			}
+		}
+		s.mu.Unlock()
+		b.state = StateLost
+	}
+	return err
 }
 
 func (s *Service) Run(ctx context.Context, sessionID, command string, timeout time.Duration) (CommandResult, bool, error) {
@@ -296,6 +352,21 @@ func (s *Service) Run(ctx context.Context, sessionID, command string, timeout ti
 		truncated = true
 	}
 	return result, truncated, nil
+}
+
+// Checkpoint publishes one archive after the full agent turn, before its
+// completion event. A failed checkpoint discards the live sandbox so the next
+// turn restores only the last committed revision.
+func (s *Service) Checkpoint(ctx context.Context, sessionID string) error {
+	if s.cfg.Workspace == nil {
+		return nil
+	}
+	return s.withSandbox(ctx, sessionID, func(sb Sandbox) error {
+		if err := s.cfg.Workspace.Checkpoint(ctx, sessionID, sb); err != nil {
+			return fmt.Errorf("%w: %v", ErrCheckpoint, err)
+		}
+		return nil
+	})
 }
 
 func workspacePath(p string) (string, error) {
@@ -340,7 +411,9 @@ func (s *Service) Write(ctx context.Context, sessionID, p string, data []byte) e
 	if len(data) > s.cfg.MaxBytes {
 		return ErrLimit
 	}
-	return s.withSandbox(ctx, sessionID, func(sb Sandbox) error { return sb.Write(ctx, p, data) })
+	return s.withSandbox(ctx, sessionID, func(sb Sandbox) error {
+		return sb.Write(ctx, p, data)
+	})
 }
 
 type EditChange struct{ Old, New string }
@@ -460,3 +533,5 @@ func (s *Service) Status(sessionID string) (State, error) {
 }
 
 func (s *Service) MaxResourceBytes() int { return s.cfg.MaxBytes }
+
+func (s *Service) ServiceToken() string { return s.cfg.ServiceToken }

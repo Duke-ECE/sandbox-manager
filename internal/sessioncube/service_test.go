@@ -49,6 +49,90 @@ type fakeClient struct {
 	createErr error
 }
 
+type fakeWorkspace struct {
+	restores      int
+	checkpoints   int
+	restoreErr    error
+	checkpointErr error
+}
+
+func (w *fakeWorkspace) Restore(context.Context, string, Sandbox) error {
+	w.restores++
+	return w.restoreErr
+}
+func (w *fakeWorkspace) Checkpoint(context.Context, string, Sandbox) error {
+	w.checkpoints++
+	return w.checkpointErr
+}
+
+func TestWorkspaceRestoreAndCheckpointGateToolSuccess(t *testing.T) {
+	ctx := context.Background()
+	client := &fakeClient{sb: &fakeSandbox{id: "cube-1", files: map[string][]byte{}}}
+	ws := &fakeWorkspace{}
+	svc, err := New(client, Config{TemplateID: "test", Workspace: ws})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Ensure(ctx, "sess-1", ""); err != nil {
+		t.Fatal(err)
+	}
+	if ws.restores != 1 {
+		t.Fatalf("restore count = %d", ws.restores)
+	}
+	if err := svc.Write(ctx, "sess-1", "file.txt", []byte("hello")); err != nil {
+		t.Fatal(err)
+	}
+	if ws.checkpoints != 0 {
+		t.Fatal("tool published workspace before turn completed")
+	}
+	if err := svc.Checkpoint(ctx, "sess-1"); err != nil {
+		t.Fatal(err)
+	}
+	if ws.checkpoints != 1 {
+		t.Fatalf("checkpoint count = %d", ws.checkpoints)
+	}
+	ws.checkpointErr = errors.New("R2 unavailable")
+	if _, _, err := svc.Run(ctx, "sess-1", "echo x", time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Checkpoint(ctx, "sess-1"); err == nil {
+		t.Fatal("turn succeeded without checkpoint")
+	}
+	if ws.checkpoints != 2 {
+		t.Fatalf("checkpoint count = %d", ws.checkpoints)
+	}
+	if client.sb.kills != 1 {
+		t.Fatalf("failed checkpoint left sandbox running: kills=%d", client.sb.kills)
+	}
+	ws.checkpointErr = nil
+	if _, err := svc.Ensure(ctx, "sess-1", ""); err != nil {
+		t.Fatalf("restore after failed checkpoint: %v", err)
+	}
+	if ws.restores != 2 {
+		t.Fatalf("restore count = %d", ws.restores)
+	}
+}
+
+func TestRestoreFailureDoesNotExposeEmptyWorkspace(t *testing.T) {
+	ctx := context.Background()
+	client := &fakeClient{sb: &fakeSandbox{id: "cube-1", files: map[string][]byte{}}}
+	ws := &fakeWorkspace{restoreErr: errors.New("R2 unavailable")}
+	svc, err := New(client, Config{TemplateID: "test", Workspace: ws})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Ensure(ctx, "sess-1", ""); err == nil {
+		t.Fatal("restore failure ignored")
+	}
+	if client.sb.kills != 1 {
+		t.Fatalf("sandbox cleanup count = %d", client.sb.kills)
+	}
+	ws.restoreErr = nil
+	if _, err := svc.Ensure(ctx, "sess-1", ""); err != nil {
+		t.Fatalf("retry after R2 recovery: %v", err)
+	}
+}
+
 func (c *fakeClient) Create(_ context.Context, _, _ string, _ time.Duration) (Sandbox, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

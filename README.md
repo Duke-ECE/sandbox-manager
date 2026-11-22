@@ -34,7 +34,22 @@ consumed as the Go module `github.com/Duke-ECE/protos`:
 - `PutResource` and `GetResource` stream bounded files under `/workspace`.
 - `CloseSessionSandbox` destroys the workspace; `GetSessionSandboxStatus` reports the manager state.
 
-The pilot uses one manager replica. It recovers session bindings from Cube sandbox metadata at startup, but has no durable compare-and-swap store or service authentication yet. Do not enable it for general production traffic. See the [Cube integration design](https://github.com/Duke-ECE/managed-agents-design/tree/main/requirements/0005-cubesandbox-integration).
+The pilot uses one manager replica. It recovers session bindings from Cube sandbox metadata at startup. When direct R2 persistence is configured, v3 requires the shared service token; session-manager owns the committed archive pointer. Do not enable it for general production traffic until a real Cube template and sandbox egress have passed the end-to-end gate. See the [Cube integration design](https://github.com/Duke-ECE/managed-agents-design/tree/main/requirements/0005-cubesandbox-integration).
+
+With `R2_ENDPOINT` set, each session has one local `/workspace`. After a
+completed agent turn that used bash, write, or edit, the runtime calls
+`CheckpointSessionSandbox` before sending `done`. The sandbox creates a deterministic tar.gz archive. A
+changed archive goes directly from the sandbox to R2 with a short-lived,
+object-specific signed PUT URL; unchanged files do not create a new revision.
+The manager verifies object size and digest metadata before the session-manager
+atomically advances the workspace pointer. A replacement sandbox downloads the
+committed archive directly from R2 with a signed GET URL and validates its
+SHA-256 and archive paths before accepting tools. Failed checkpoints destroy
+the sandbox; the next tool restores the last committed revision. The sandbox
+image must include Python 3 and allow HTTPS egress to the R2 S3 endpoint.
+Archives are capped at 256 MiB compressed. A background cleanup pass removes
+uncommitted/older revisions after 24 hours and purged-session objects after a
+10-minute signed-URL grace period. R2 credentials never enter the sandbox.
 
 Errors use standard gRPC status codes (`INVALID_ARGUMENT`, `RESOURCE_EXHAUSTED`,
 `DEADLINE_EXCEEDED`, …). Server reflection is enabled for `grpcurl`.
@@ -63,6 +78,20 @@ Errors use standard gRPC status codes (`INVALID_ARGUMENT`, `RESOURCE_EXHAUSTED`,
 | `CUBE_MAX_RESOURCE_BYTES` | `1048576` | Maximum upload or download per file |
 | `CUBE_MAX_OUTPUT_BYTES` | `1048576` | Maximum stdout and stderr bytes returned per command |
 | `CUBE_MAX_RUN_SECONDS` | `60` | Hard cap on a command timeout |
+| `R2_ENDPOINT` | unset | R2 S3 HTTPS origin (`https://<account>.r2.cloudflarestorage.com`), no bucket path; unset disables direct workspace persistence |
+| `R2_BUCKET` | unset | Private R2 bucket name; required when `R2_ENDPOINT` is set |
+| `R2_ACCESS_KEY_ID` | unset | Bucket-scoped R2 access key, held only by sandbox-manager |
+| `R2_SECRET_ACCESS_KEY` | unset | Matching R2 secret key, held only by sandbox-manager |
+| `SESSION_MANAGER_ADDR` | unset | Internal session-manager gRPC address for workspace metadata; required with R2 |
+| `SERVICE_TOKEN` | unset | Shared internal token for session-manager RPCs and v3 sandbox calls; required with R2 |
+
+The optional `r2-workspace` Secret belongs in `pi-sandbox-system` and supplies
+`endpoint`, `bucket`, `access_key_id`, and `secret_access_key`. A separate
+`session-service-token` Secret with key `token` must exist in the same namespace;
+Kubernetes Secrets do not cross namespaces. Keep R2 unset until the contract,
+database migration, and matching runtime/backend changes are deployed. Adding
+the Secret requires a sandbox-manager rollout/restart before its values appear
+as environment variables.
 
 ## Local development
 

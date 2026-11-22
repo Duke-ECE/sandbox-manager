@@ -31,6 +31,10 @@ func toStatus(err error) error {
 		return status.Error(codes.ResourceExhausted, err.Error())
 	case errors.Is(err, sessioncube.ErrUnready):
 		return status.Error(codes.FailedPrecondition, err.Error())
+	case errors.Is(err, sessioncube.ErrUnauthenticated):
+		return status.Error(codes.Unauthenticated, err.Error())
+	case errors.Is(err, sessioncube.ErrCheckpoint):
+		return status.Error(codes.Unavailable, err.Error())
 	}
 	var sbErr *sandbox.Error
 	if errors.As(err, &sbErr) {
