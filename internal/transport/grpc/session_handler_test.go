@@ -11,7 +11,10 @@ import (
 	v3 "github.com/Duke-ECE/protos/gen/go/sandbox/v3"
 	"github.com/Duke-ECE/sandbox-manager/internal/sessioncube"
 	googlegrpc "google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 )
 
@@ -49,7 +52,7 @@ func (s *sessionTestSandbox) Kill(context.Context) error { return nil }
 
 func TestSessionV3OverGRPC(t *testing.T) {
 	ctx := context.Background()
-	svc, err := sessioncube.New(&sessionTestClient{sb: &sessionTestSandbox{files: make(map[string][]byte)}}, sessioncube.Config{TemplateID: "test"})
+	svc, err := sessioncube.New(&sessionTestClient{sb: &sessionTestSandbox{files: make(map[string][]byte)}}, sessioncube.Config{TemplateID: "test", ServiceToken: "secret"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,6 +67,10 @@ func TestSessionV3OverGRPC(t *testing.T) {
 	}
 	defer conn.Close()
 	client := v3.NewSessionSandboxServiceClient(conn)
+	if _, err := client.EnsureSessionSandbox(ctx, &v3.EnsureSessionSandboxRequest{SessionId: "sess-test"}); status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("missing token status = %v", err)
+	}
+	ctx = metadata.AppendToOutgoingContext(ctx, "x-service-token", "secret")
 	if _, err := client.EnsureSessionSandbox(ctx, &v3.EnsureSessionSandboxRequest{SessionId: "sess-test"}); err != nil {
 		t.Fatal(err)
 	}

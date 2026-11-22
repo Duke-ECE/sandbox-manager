@@ -16,12 +16,17 @@ import (
 
 	"k8s.io/client-go/kubernetes"
 
+	v2 "github.com/Duke-ECE/protos/gen/go/session/v2"
 	"github.com/Duke-ECE/sandbox-manager/internal/executor"
 	"github.com/Duke-ECE/sandbox-manager/internal/infrastructure/cube"
 	"github.com/Duke-ECE/sandbox-manager/internal/infrastructure/k8s"
+	"github.com/Duke-ECE/sandbox-manager/internal/infrastructure/r2workspace"
 	"github.com/Duke-ECE/sandbox-manager/internal/sandbox"
 	"github.com/Duke-ECE/sandbox-manager/internal/sessioncube"
 	transportgrpc "github.com/Duke-ECE/sandbox-manager/internal/transport/grpc"
+	"github.com/Duke-ECE/sandbox-manager/internal/workspace"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 // Configuration (environment):
@@ -77,6 +82,7 @@ func main() {
 	}
 
 	var cubeSvc *sessioncube.Service
+	var workspaceCleanup *r2workspace.Client
 	if apiURL := os.Getenv("CUBE_API_URL"); apiURL != "" {
 		for _, name := range []string{"CUBE_API_KEY", "CUBE_TEMPLATE_ID", "CUBE_PROXY_NODE_IP", "CUBE_PROXY_PORT_HTTP", "CUBE_PROXY_SCHEME", "CUBE_SANDBOX_DOMAIN"} {
 			if os.Getenv(name) == "" {
@@ -91,13 +97,44 @@ func main() {
 		cfg.APIURL = apiURL
 		cubeClient := cube.New(cfg)
 		defer cubeClient.Close()
+		var workspaceSync sessioncube.Workspace
+		if endpoint := os.Getenv("R2_ENDPOINT"); endpoint != "" {
+			for _, name := range []string{"R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "SESSION_MANAGER_ADDR", "SERVICE_TOKEN"} {
+				if os.Getenv(name) == "" {
+					log.Fatalf("%s is required when R2_ENDPOINT is set", name)
+				}
+			}
+			objects, err := workspace.NewR2(workspace.R2Config{
+				Endpoint: endpoint, Bucket: os.Getenv("R2_BUCKET"),
+				AccessKeyID: os.Getenv("R2_ACCESS_KEY_ID"), SecretAccessKey: os.Getenv("R2_SECRET_ACCESS_KEY"),
+			})
+			if err != nil {
+				log.Fatalf("init R2 workspace: %v", err)
+			}
+			conn, err := grpc.NewClient(os.Getenv("SESSION_MANAGER_ADDR"), grpc.WithTransportCredentials(insecure.NewCredentials()))
+			if err != nil {
+				log.Fatalf("connect workspace ledger: %v", err)
+			}
+			defer conn.Close()
+			workspaceCleanup, err = r2workspace.New(objects, v2.NewWorkspaceServiceClient(conn), os.Getenv("SERVICE_TOKEN"))
+			if err != nil {
+				log.Fatalf("init workspace sync: %v", err)
+			}
+			workspaceSync = workspaceCleanup
+		}
+		cubeServiceToken := ""
+		if workspaceSync != nil {
+			cubeServiceToken = os.Getenv("SERVICE_TOKEN")
+		}
 		cubeSvc, err = sessioncube.New(cubeClient, sessioncube.Config{
-			TemplateID:  os.Getenv("CUBE_TEMPLATE_ID"),
-			MaxSessions: envInt("CUBE_MAX_SESSIONS", 10),
-			TTL:         time.Duration(envInt("CUBE_TTL_SECONDS", 1800)) * time.Second,
-			MaxBytes:    envInt("CUBE_MAX_RESOURCE_BYTES", 1<<20),
-			MaxOutput:   envInt("CUBE_MAX_OUTPUT_BYTES", 1<<20),
-			MaxRun:      time.Duration(envInt("CUBE_MAX_RUN_SECONDS", 60)) * time.Second,
+			TemplateID:   os.Getenv("CUBE_TEMPLATE_ID"),
+			MaxSessions:  envInt("CUBE_MAX_SESSIONS", 10),
+			TTL:          time.Duration(envInt("CUBE_TTL_SECONDS", 1800)) * time.Second,
+			MaxBytes:     envInt("CUBE_MAX_RESOURCE_BYTES", 1<<20),
+			MaxOutput:    envInt("CUBE_MAX_OUTPUT_BYTES", 1<<20),
+			MaxRun:       time.Duration(envInt("CUBE_MAX_RUN_SECONDS", 60)) * time.Second,
+			Workspace:    workspaceSync,
+			ServiceToken: cubeServiceToken,
 		})
 		if err != nil {
 			log.Fatalf("init Cube integration: %v", err)
@@ -128,6 +165,24 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	if workspaceCleanup != nil {
+		go func() {
+			ticker := time.NewTicker(time.Hour)
+			defer ticker.Stop()
+			for {
+				cleanupCtx, cleanupCancel := context.WithTimeout(ctx, 5*time.Minute)
+				if err := workspaceCleanup.Cleanup(cleanupCtx); err != nil {
+					log.Printf("workspace cleanup failed: %v", err)
+				}
+				cleanupCancel()
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+				}
+			}
+		}()
+	}
 
 	go svc.RunReaper()
 	go svc.RunPoolController(ctx)

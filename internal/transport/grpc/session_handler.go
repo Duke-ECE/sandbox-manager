@@ -3,6 +3,8 @@ package grpc
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
+	"google.golang.org/grpc/metadata"
 	"io"
 	"strings"
 	"time"
@@ -17,6 +19,20 @@ type SessionHandler struct {
 }
 
 func NewSessionHandler(svc *sessioncube.Service) *SessionHandler { return &SessionHandler{svc: svc} }
+
+func (h *SessionHandler) authorize(ctx context.Context) error {
+	token := h.svc.ServiceToken()
+	if token == "" {
+		return nil
+	}
+	md, _ := metadata.FromIncomingContext(ctx)
+	for _, presented := range md.Get("x-service-token") {
+		if subtle.ConstantTimeCompare([]byte(token), []byte(presented)) == 1 {
+			return nil
+		}
+	}
+	return toStatus(sessioncube.ErrUnauthenticated)
+}
 
 func sessionState(state sessioncube.State) v3.SessionSandboxState {
 	switch state {
@@ -34,6 +50,9 @@ func sessionState(state sessioncube.State) v3.SessionSandboxState {
 }
 
 func (h *SessionHandler) EnsureSessionSandbox(ctx context.Context, req *v3.EnsureSessionSandboxRequest) (*v3.EnsureSessionSandboxResponse, error) {
+	if err := h.authorize(ctx); err != nil {
+		return nil, err
+	}
 	state, err := h.svc.Ensure(ctx, req.GetSessionId(), req.GetProfileId())
 	if err != nil {
 		return nil, toStatus(err)
@@ -42,6 +61,9 @@ func (h *SessionHandler) EnsureSessionSandbox(ctx context.Context, req *v3.Ensur
 }
 
 func (h *SessionHandler) ExecuteTool(ctx context.Context, req *v3.ExecuteToolRequest) (*v3.ExecuteToolResponse, error) {
+	if err := h.authorize(ctx); err != nil {
+		return nil, err
+	}
 	var result sessioncube.CommandResult
 	var truncated bool
 	var err error
@@ -89,6 +111,9 @@ func (h *SessionHandler) ExecuteTool(ctx context.Context, req *v3.ExecuteToolReq
 }
 
 func (h *SessionHandler) PutResource(stream v3.SessionSandboxService_PutResourceServer) error {
+	if err := h.authorize(stream.Context()); err != nil {
+		return err
+	}
 	var sessionID, filePath string
 	var data bytes.Buffer
 	first := true
@@ -121,6 +146,9 @@ func (h *SessionHandler) PutResource(stream v3.SessionSandboxService_PutResource
 }
 
 func (h *SessionHandler) GetResource(req *v3.GetResourceRequest, stream v3.SessionSandboxService_GetResourceServer) error {
+	if err := h.authorize(stream.Context()); err != nil {
+		return err
+	}
 	data, err := h.svc.Read(stream.Context(), req.GetSessionId(), req.GetPath())
 	if err != nil {
 		return toStatus(err)
@@ -140,13 +168,19 @@ func (h *SessionHandler) GetResource(req *v3.GetResourceRequest, stream v3.Sessi
 }
 
 func (h *SessionHandler) CloseSessionSandbox(ctx context.Context, req *v3.CloseSessionSandboxRequest) (*v3.CloseSessionSandboxResponse, error) {
+	if err := h.authorize(ctx); err != nil {
+		return nil, err
+	}
 	if err := h.svc.Close(ctx, req.GetSessionId()); err != nil {
 		return nil, toStatus(err)
 	}
 	return &v3.CloseSessionSandboxResponse{}, nil
 }
 
-func (h *SessionHandler) GetSessionSandboxStatus(_ context.Context, req *v3.GetSessionSandboxStatusRequest) (*v3.GetSessionSandboxStatusResponse, error) {
+func (h *SessionHandler) GetSessionSandboxStatus(ctx context.Context, req *v3.GetSessionSandboxStatusRequest) (*v3.GetSessionSandboxStatusResponse, error) {
+	if err := h.authorize(ctx); err != nil {
+		return nil, err
+	}
 	state, err := h.svc.Status(req.GetSessionId())
 	if err != nil {
 		return nil, toStatus(err)
